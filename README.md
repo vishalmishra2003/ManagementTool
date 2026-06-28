@@ -1,147 +1,90 @@
-# System Architecture — Apextron Management Tool
+# Apextron Management Tool
 
-This document explains the system design of the Management Tool: how the frontend
-and backend are structured, how they communicate, and the key architectural
-patterns each layer uses.
-
----
-
-## 1. High-Level Overview
-
-The application is a **decoupled client–server system**: a single-page React
-application (SPA) talking to a stateless REST API over HTTP/JSON. The two apps
-are developed and deployed independently.
-
-```
-┌─────────────────────────┐         HTTP / JSON         ┌──────────────────────────┐
-│   FRONTEND (React SPA)   │ ──── Bearer JWT token ─────▶│  BACKEND (Express REST)  │
-│   Vite · localhost:5173  │ ◀─── JSON responses ────────│      localhost:5000      │
-└─────────────────────────┘                             └───────────┬──────────────┘
-                                                                     │ Mongoose ODM
-                                                                     ▼
-                                                             ┌───────────────┐
-                                                             │  MongoDB Atlas │
-                                                             └───────────────┘
-```
-
-- **No SSR**, no API gateway, no microservices.
-- A **stateless REST monolith** behind a **single-page app**.
-- Authentication is **JWT Bearer tokens** — no server-side sessions.
+A simple, web-based tool for managing students and their fee payments.
+It is built for the admin of a tutorial / coaching business to keep all
+student records and fee collection in one place.
 
 ---
 
-## 2. Backend — Layered (N-tier) MVC Architecture
+## What It's For
 
-Each request flows top-to-bottom through clearly separated layers:
+The tool helps you manage students across two types of courses:
 
-```
-Route → Middleware → Controller → Model (Mongoose) → MongoDB
-```
+- **Admission** students
+- **English** students
 
-| Layer                | Files                                                      | Responsibility                              |
-| -------------------- | ---------------------------------------------------------- | ------------------------------------------- |
-| **Entry / Compose**  | `server.js`, `src/app.js`                                  | Boot, connect DB, assemble middleware       |
-| **Config**           | `src/config/env.js`, `src/config/db.js`                    | Centralized env + DB connection             |
-| **Routing**          | `src/routes/index.js`, `src/routes/studentRoutes.js`       | URL → handler mapping, mount auth           |
-| **Middleware**       | `src/middleware/auth.js`, `src/middleware/errorHandler.js` | JWT verify, centralized error handling      |
-| **Controller**       | `src/controllers/studentController.js`                     | Business logic / request handling           |
-| **Model**            | `src/models/AdmissionStudent.js`, `src/models/feesSchema.js` | Data schema + domain rules                 |
-| **Utils**            | `src/utils/asyncHandler.js`, `src/utils/ApiError.js`       | Cross-cutting helpers                       |
-
-### Key Patterns
-
-- **Factory pattern for reuse** — `buildStudentRouter(Model, variantField)` and
-  `createStudentController(Model, variantField)` generate routers/controllers
-  parameterized by a Mongoose model. Admission and English students share **one
-  implementation**, differentiated only by a `variantField` (`board` vs `batch`).
-- **Stateless JWT auth** — `requireAuth` middleware verifies a Bearer token on
-  every protected request; no sessions are stored server-side.
-- **Centralized error handling** — `asyncHandler` wraps async controllers so
-  thrown errors funnel into a single `errorHandler` middleware; `ApiError`
-  standardizes status codes and messages.
-- **Embedded document model** — `fees` and `payments` live as embedded
-  sub-documents on the student (not separate collections). Fee totals are
-  **derived/computed** at serialization time via `feeSummary()`, never stored.
-
-### API Surface
-
-All routes are mounted under `/api`:
-
-| Method                          | Path                                | Auth | Purpose                       |
-| ------------------------------- | ----------------------------------- | ---- | ----------------------------- |
-| `POST`                          | `/api/auth/...`                     | No   | Login → issue JWT             |
-| `GET`                           | `/api/health`                       | No   | Health check                  |
-| `GET/POST`                      | `/api/admission`, `/api/english`    | Yes  | List / create students        |
-| `GET/PUT/DELETE`                | `/api/{course}/:id`                 | Yes  | Read / update / delete student |
-| `PATCH`                         | `/api/{course}/:id/fees`            | Yes  | Set total fee + discount      |
-| `POST`                          | `/api/{course}/:id/payments`        | Yes  | Record a payment              |
-| `DELETE`                        | `/api/{course}/:id/payments/:pid`   | Yes  | Undo a payment                |
-| `*`                             | `/api/fee-structures`               | Yes  | Fee structure CRUD            |
+For each student you can keep their personal details, track how much fee they
+owe, and record every payment they make — all from one screen.
 
 ---
 
-## 3. Frontend — Component-Based SPA with Layered Separation
+## How It Works
 
-```
-main.tsx → AuthContext (provider) → App (router) → Pages → Components
-                                          │
-                              Hooks ──────┤
-                                          │
-                              API layer ──┴──▶ apiFetch → backend
-```
+### 1. Signing In
 
-| Layer                 | Files                                                      | Responsibility                          |
-| --------------------- | ---------------------------------------------------------- | --------------------------------------- |
-| **Routing / shell**   | `src/App.tsx`                                              | Client-side routes, auth gating         |
-| **Global state**      | `src/context/AuthContext.tsx`                             | Auth status via Context API             |
-| **Data state**        | `src/hooks/useStudents.ts`                                | Custom hooks for fetching data          |
-| **API client**        | `src/api/client.ts`, `src/api/students.ts`, `src/api/auth.ts` | Service layer wrapping `fetch` + tokens |
-| **Pages**             | `src/pages/Landing.tsx`, `StudentSection.tsx`, `FeeStructurePage.tsx` | Route-level views             |
-| **Components**        | `src/components/StudentFields.tsx`, `FeesPanel.tsx`, etc.  | Reusable UI                             |
-| **Config**            | `src/config/courses.ts`                                    | Course-driven configuration             |
+When you open the tool, it signs you in automatically as the admin. Once you're
+in, you land on the **home page** where you choose what you want to do.
 
-### Key Patterns
+### 2. The Home Page
 
-- **Configuration-driven UI** — `admissionConfig` / `englishConfig` drive the
-  same `StudentSection` / `CoursePage` for both course types. This mirrors the
-  backend's factory approach: one implementation, parameterized by config.
-- **Service layer abstraction** — all HTTP goes through `apiFetch`, which injects
-  the JWT and normalizes errors. Components never call `fetch` directly.
-- **Custom hooks for data** — `useStudents` manages local state + manual refresh.
-  No React Query / Redux; state management is intentionally lightweight.
-- **Context API** for the single piece of true global state (auth).
+From the home page you can:
+
+- Open the **Admission** student section
+- Open the **English** student section
+- Open the **Fee Structure** settings
+
+You can also switch between **light mode** and **dark mode** at any time using
+the toggle in the top bar. Your choice is remembered the next time you visit.
+
+### 3. Managing Students
+
+Inside a course section you can:
+
+- **Add a new student** — fill in their details (name, contact numbers,
+  address, class/standard, school, date of birth, and so on) and save.
+- **View all students** — see the full list of students in that course.
+- **Filter the list** — narrow it down by class/standard or by board/batch.
+- **Open a student** — click any student to see their full profile and
+  payment history.
+- **Edit a student** — update their details whenever something changes.
+- **Delete a student** — remove a student record you no longer need.
+
+### 4. Handling Fees
+
+Every student has their own fee details. For each student you can:
+
+- **Set the total fee** and apply a **discount** if needed.
+- **Record a payment** each time the student pays — you note the amount, the
+  date, the payment method (cash, UPI, card, etc.), and an optional note.
+- **See the balance update automatically** — the tool works out the net fee
+  (total minus discount), how much has been paid, and how much is still due.
+- **See the payment status** at a glance — each student is marked as:
+  - **Unpaid** — nothing paid yet
+  - **Partial** — some amount paid, balance remaining
+  - **Paid** — fully paid
+- **Undo a payment** — if a payment was recorded by mistake, you can remove it
+  and the balance corrects itself.
+
+### 5. Fee Structures
+
+The **Fee Structure** section lets you set up standard fee amounts for the
+different courses, so you have a ready reference when adding fees for students.
+
+### 6. Downloading Data
+
+You can **download student and fee information as a spreadsheet (CSV)** file,
+which you can open in Excel or Google Sheets for your own records or reporting.
 
 ---
 
-## 4. Cross-Cutting Concerns
+## In Short
 
-| Concern              | Implementation                                                            |
-| -------------------- | ------------------------------------------------------------------------ |
-| **Auth**             | JWT Bearer token; stored in `localStorage`, injected by `apiFetch`       |
-| **CORS**             | Restricted to `env.clientOrigin` in `app.js`                             |
-| **Error handling**   | Backend: `ApiError` + `errorHandler`. Frontend: `ApiError` class in client |
-| **Config / secrets** | `.env.developement` loaded via `dotenv` in `config/env.js`               |
-| **Theming**          | Dark mode toggled on `documentElement`, persisted in `localStorage`      |
+This tool is your single place to:
 
----
+- Keep all student details organised by course
+- Track who has paid, who hasn't, and how much is still owed
+- Record and manage every fee payment
+- Export your data whenever you need it
 
-## 5. The Defining Design Choice
-
-The standout architectural decision on **both** sides is
-**factory / config-parameterized reuse**:
-
-- **Backend:** one router + controller factory serves both Admission and English
-  students, differentiated only by a `variantField`.
-- **Frontend:** one set of pages/components is driven by a per-course config
-  object.
-
-This keeps the two student "courses" (Admission and English) running through a
-single shared codebase rather than duplicated implementations.
-
----
-
-## 6. One-Line Summary
-
-> A stateless JWT-secured REST monolith (layered MVC — Express + Mongoose +
-> MongoDB) serving a config-driven React SPA (component + service-layer
-> architecture, Context for global state).
+Everything is designed to be quick to use, so day-to-day student and fee
+management stays simple.
